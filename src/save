@@ -1,0 +1,303 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <pthread.h>
+#include "common.h"
+#include <signal.h>
+#include "client_mgmt.h"
+#include <libwebsockets.h>
+
+Queue* output_queue;
+
+volatile sig_atomic_t server_running = 1;
+volatile sig_atomic_t web_running = 1;
+
+struct lws_context* context;
+struct lws* wsi;
+
+static const struct lws_extension exts[] = {
+    { NULL, NULL, NULL }
+};
+
+static int callback(struct lws* wsi [[maybe_unused]], enum lws_callback_reasons reason, void* user [[maybe_unused]], void* in, size_t len [[maybe_unused]]) {
+    switch (reason) {
+        case LWS_CALLBACK_WSI_CREATE:
+            printf("WebSocket client WSI created\n");
+            break;
+        case LWS_CALLBACK_CLIENT_CONNECTION_ERROR:
+            fprintf(stderr, "WebSocket connection failed: %s\n", in ? (char*)in : "No error details");
+            web_running = 0;
+            break;
+        case LWS_CALLBACK_ESTABLISHED:
+            printf("WebSocket connected\n");
+            break;
+        case LWS_CALLBACK_CLIENT_WRITEABLE:
+            printf("Connection is writeable\n");
+            break;
+        case LWS_CALLBACK_CLOSED:
+            printf("WebSocket disconnected\n");
+            web_running = 0;
+            break;
+        case LWS_CALLBACK_CLIENT_RECEIVE:
+            printf("Received from server: %.*s\n", (int)len, (char*)in);
+            break;
+        default:
+            break;
+    }
+    return 0;
+}
+
+static struct lws_protocols protocols[] = {
+    {"", callback, 0, 0, 0}, // Added id = 0
+    {NULL, NULL, 0, 0, 0}                // Added id = 0
+};
+
+void* web_thread(void* arg [[maybe_unused]]) {
+    struct lws_context_creation_info info;
+    memset(&info, 0, sizeof(info));
+    info.port = CONTEXT_PORT_NO_LISTEN; // Client mode
+    info.protocols = protocols;
+    info.extensions = exts; // Empty extensions array, if needed
+    info.options = LWS_SERVER_OPTION_DO_SSL_GLOBAL_INIT;
+
+    context = lws_create_context(&info);
+    if (!context) {
+        fprintf(stderr, "lws_create_context failed\n");
+        return NULL;
+    }
+
+    struct lws_client_connect_info ccinfo = {0};
+    ccinfo.context = context;
+    ccinfo.address = "localhost";
+    ccinfo.port = 8080;
+    ccinfo.path = "/";
+    ccinfo.host = ccinfo.address;
+    ccinfo.origin = ccinfo.address;
+    ccinfo.protocol = protocols[0].name;
+
+    wsi = lws_client_connect_via_info(&ccinfo);
+    if (!wsi) {
+        fprintf(stderr, "WebSocket client connect failed\n");
+        lws_context_destroy(context);
+        return NULL;
+    }
+
+    while (server_running && web_running) {
+        lws_service(context, 50);
+        char* output = queue_pop(output_queue);
+        if (output) {
+            unsigned char buf[LWS_PRE + BUFFER_SIZE];
+            unsigned char* p = &buf[LWS_PRE];
+            size_t len = snprintf((char*)p, BUFFER_SIZE, "%s", output);
+            printf("Attempting to send message: %s (len: %zu)\n", output, len);
+            int written = lws_write(wsi, p, (int)len, LWS_WRITE_TEXT);
+            if (written < (int)len) {
+                fprintf(stderr, "lws_write failed: wrote %d of %zu bytes\n", written, len);
+            } else {
+                printf("Successfully sent message\n");
+            }
+            free(output);
+        }
+    }
+
+    lws_context_destroy(context);
+    return NULL;
+}
+
+void sockaddr_in_init(struct sockaddr_in* local_address) {
+    memset(local_address, 0, sizeof(*local_address));
+    local_address->sin_family = AF_INET;
+    local_address->sin_addr.s_addr = INADDR_ANY;
+    local_address->sin_port = htons(SERVER_PORT);
+}
+
+int createSocket() {
+    int sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sock == -1) {
+        fprintf(stderr, "socket() failed: %d: %s\n", ERRNO, strerror(ERRNO));
+        return -1;
+    }
+    return sock;
+}
+
+int bind_socket(int sock, struct sockaddr_in* address) {
+    if (bind(sock, (struct sockaddr*)address, sizeof(*address)) == -1) {
+        fprintf(stderr, "bind() failed %d: %s\n", ERRNO, strerror(ERRNO));
+        close(sock);
+        #ifdef _WIN32
+        WSACleanup();
+        #endif
+        return -1;
+    }
+    return 0;
+}
+
+int listen_socket(int sock) {
+    if (listen(sock, MAX_QUEUE) == -1) {
+        fprintf(stderr, "listen() failed %d: %s\n", ERRNO, strerror(ERRNO));
+        close(sock);
+        #ifdef _WIN32
+        WSACleanup();
+        #endif
+        return -1;
+    }
+    return 0;
+}
+
+int accept_connection(int serverListen_socket, struct sockaddr_in* connectedClientAddr, socklen_t* connAddr_size) {
+    int serverCurrCon_socket = accept(serverListen_socket, (struct sockaddr*)&connectedClientAddr, connAddr_size);
+    if (serverCurrCon_socket == -1) {
+        fprintf(stderr, "accept() failed %d: %s\n", ERRNO, strerror(ERRNO));
+        return -1;
+    }
+    return serverCurrCon_socket;
+}
+
+int getClient_IP(char* ip_buffer, struct sockaddr_in* client_address, int connectionSocket) {
+    if (inet_ntop(AF_INET, &(client_address->sin_addr), ip_buffer, INET_ADDRSTRLEN) == NULL) {
+        fprintf(stderr, "inet_ntop() failed %d: %s\n", ERRNO, strerror(ERRNO));
+        close(connectionSocket);
+        #ifdef _WIN32
+        WSACleanup();
+        #endif
+        return -1;
+    }
+    return 0;
+}
+
+void signal_handler(int sig) {
+    if (sig == SIGINT || sig == SIGTERM) {
+        server_running = 0;
+        printf("Shutting down server...\n");
+    }
+}
+
+#ifdef _WIN32
+DWORD WINAPI handle_client(LPVOID lpParam) {
+    int client_socket = *(int*)lpParam;
+    #else
+    void* handle_client(void* arg) {
+        int client_socket = *((int*)arg);
+        #endif
+        free(arg);
+        while (server_running) {
+            char output_recvBuffer[BUFFER_SIZE];
+            char command[BUFFER_SIZE] = "";
+
+            int command_len = strlen(command);
+            if (send(client_socket, command, command_len, 0) != command_len) {
+                fprintf(stderr, "send() command failed: %d\n", ERRNO);
+                break;
+            }
+            int bytes_received = recv(client_socket, output_recvBuffer, BUFFER_SIZE - 1, 0);
+            if (bytes_received > 0) {
+                output_recvBuffer[bytes_received] = '\0';
+                printf("Received from client: %s\n", output_recvBuffer);
+                queueNode* node = queue_createNode(output_recvBuffer);
+                if (node) queue_push(output_queue, node);
+                else printf("Unable to push queueNode holding your output to queue. queueNode == NULL\n");
+            } else if (bytes_received == 0) {
+                printf("Client disconnected.\n");
+            } else {
+                fprintf(stderr, "recv() from client failed: %d\n", ERRNO);
+            }
+        }
+        close(client_socket);
+        #ifdef _WIN32
+        return 0;
+        #else
+        pthread_exit(NULL);
+        return NULL;
+        #endif
+    }
+
+    int main() {
+        signal(SIGINT, signal_handler);
+        signal(SIGTERM, signal_handler);
+
+        init_mutexes();
+
+        #ifdef _WIN32
+        WSADATA wsaData;
+        if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+            perror("WSAStartup failed");
+            return 1;
+        }
+        #endif
+
+        int serverListen_socket;
+        struct sockaddr_in local_address;
+
+        serverListen_socket = createSocket();
+        if (serverListen_socket == -1) return 1;
+        sockaddr_in_init(&local_address);
+        if (bind_socket(serverListen_socket, &local_address) == -1) return 1;
+        if (listen_socket(serverListen_socket) == -1) return 1;
+
+        printf("Listening on port %d...\n", SERVER_PORT);
+
+        output_queue = malloc(sizeof(Queue));
+        if (!output_queue) {
+            fprintf(stderr, "Failed to allocate output_queue\n");
+            destroy_mutexes();
+            close(serverListen_socket);
+            #ifdef _WIN32
+            WSACleanup();
+            #endif
+            return 1;
+        }
+        queue_init(output_queue);
+
+        pthread_t web_thread_id;
+        if (pthread_create(&web_thread_id, NULL, web_thread, NULL) != 0) {
+            fprintf(stderr, "Failed to create web_thread\n");
+            queue_destroy(output_queue);
+            free(output_queue);
+            destroy_mutexes();
+            close(serverListen_socket);
+            #ifdef _WIN32
+            WSACleanup();
+            #endif
+            return 1;
+        }
+        pthread_detach(web_thread_id);
+
+        while (server_running) {
+            struct sockaddr_in currConn_address;
+            socklen_t conAddr_size = sizeof(currConn_address);
+            printf("Server waiting for connection...\n");
+
+            int serverCurrCon_socket = accept_connection(serverListen_socket, &currConn_address, &conAddr_size);
+
+            char clientIP[INET_ADDRSTRLEN];
+            if (getClient_IP(clientIP, &currConn_address, serverCurrCon_socket) == -1) printf("Connection closed");
+
+            #ifdef _WIN32
+            HANDLE thread_id;
+            CreateThread(NULL, 0, handle_client, (void*)&serverCurrCon_socket, 0, &thread_id);
+            CloseHandle(thread_id);
+            #else
+            pthread_t thread_id;
+            int* client_socket_ptr = malloc(sizeof(int));
+            *client_socket_ptr = serverCurrCon_socket;
+            if (pthread_create(&thread_id, NULL, handle_client, (void*)client_socket_ptr) != 0) {
+                free(client_socket_ptr);
+            }
+            pthread_detach(thread_id);
+            #endif
+
+            printf("Connected to: %s:%d ||| Thread ID: %ld\n", clientIP, ntohs(currConn_address.sin_port), (long)thread_id);
+        }
+
+        web_running = 0;
+        pthread_join(web_thread_id, NULL);
+        queue_destroy(output_queue);
+        free(output_queue);
+        destroy_mutexes();
+        close(serverListen_socket);
+        #ifdef _WIN32
+        WSACleanup();
+        #endif
+        return 0;
+    }
+

@@ -1,0 +1,6 @@
+/home/point3/Desktop/Client-server/build/CMakeFiles/edit_cache.dir
+/home/point3/Desktop/Client-server/build/CMakeFiles/rebuild_cache.dir
+/home/point3/Desktop/Client-server/build/src/CMakeFiles/server.dir
+/home/point3/Desktop/Client-server/build/src/CMakeFiles/client.dir
+/home/point3/Desktop/Client-server/build/src/CMakeFiles/edit_cache.dir
+/home/point3/Desktop/Client-server/build/src/CMakeFiles/rebuild_cache.dir

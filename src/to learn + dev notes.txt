@@ -1,0 +1,12 @@
+volatile
+atomic
+ccinfo.host & ccinfo.origin
+static
+size_t
+
+
+mkdir returns command unrecognized but still makes dir  // FIX IT BY JUST CREATING A SHELL //
+same for sending output into txt files // FIX BY CREATING SHELL //
+masking isn’t required by the WebSocket protocol (only client-to-server frames need masking)
+CONNECTIONS: read as client id
+currently connections list is only updated if server C sends it, make it so there's a request - response mechanism instead incase of refreshing the page

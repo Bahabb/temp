@@ -1,0 +1,1 @@
+/usr/bin/cc  -D_POSIX_C_SOURCE=2 -g CMakeFiles/server.dir/server.c.o CMakeFiles/server.dir/client_mgmt.c.o -o server  -lwebsockets -lcap /usr/lib/x86_64-linux-gnu/libssl.so /usr/lib/x86_64-linux-gnu/libcrypto.so -lpthread

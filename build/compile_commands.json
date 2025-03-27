@@ -1,0 +1,20 @@
+[
+{
+  "directory": "/home/point3/Desktop/Client-server/build/src",
+  "command": "/usr/bin/cc    -D_POSIX_C_SOURCE=2 -g -std=gnu11 -Wall -Wextra -o CMakeFiles/server.dir/server.c.o -c /home/point3/Desktop/Client-server/src/server.c",
+  "file": "/home/point3/Desktop/Client-server/src/server.c",
+  "output": "src/CMakeFiles/server.dir/server.c.o"
+},
+{
+  "directory": "/home/point3/Desktop/Client-server/build/src",
+  "command": "/usr/bin/cc    -D_POSIX_C_SOURCE=2 -g -std=gnu11 -Wall -Wextra -o CMakeFiles/server.dir/client_mgmt.c.o -c /home/point3/Desktop/Client-server/src/client_mgmt.c",
+  "file": "/home/point3/Desktop/Client-server/src/client_mgmt.c",
+  "output": "src/CMakeFiles/server.dir/client_mgmt.c.o"
+},
+{
+  "directory": "/home/point3/Desktop/Client-server/build/src",
+  "command": "/usr/bin/cc    -D_POSIX_C_SOURCE=2 -g -std=gnu11 -o CMakeFiles/client.dir/client.c.o -c /home/point3/Desktop/Client-server/src/client.c",
+  "file": "/home/point3/Desktop/Client-server/src/client.c",
+  "output": "src/CMakeFiles/client.dir/client.c.o"
+}
+]
